@@ -262,96 +262,132 @@ uniform vec3 uLightingDirection;	//direction of light
 
     var triLinePositionBuffer;		var triLineColorBuffer;
 
+    var spherePositionBuffer;	var sphereVertexTextureCoordBuffer;	var sphereVertexNormalCoordBuffer;
+
     var negX = -2.0; var posX = 2.0; var negY = -2.0; var posY = 2.0;
     //We will Generate the geometry with this function
 
-    function initCircleBuffers(){ 
+    function initCircleBuffers(){
 
         var useGouraud = document.getElementById("gouraud").checked;
         var useLowPoly = document.getElementById("poly").checked;
 
 
-        var sRadius = .6; var slices = 12; var stacks = 8; var sVertices = []; var count =0;
+        var sRadius = .6; var slices = 12; var stacks = 8; var count = 0;
 
         if (useLowPoly){
             slices = 50; stacks = 40;
         }
 
-        var vertexNormals = [];
+        //Fill typed arrays straight through with a running write index. Growing plain
+        //arrays with concat re-copied the whole array every triangle, which is what made
+        //the high poly count take seconds to build.
+        var vertexCount = stacks * (slices+1) * 6;
+        var sVertices = new Float32Array(vertexCount * 3);
+        var vertexNormals = new Float32Array(vertexCount * 3);
+        var textureCoords = new Float32Array(vertexCount * 2);
+        var vi = 0; var ni = 0; var ti = 0;
+
+        //scratch normal so the per-triangle math allocates nothing inside the loop
+        var normal = [0, 0, 0];
 
         for(t = 0; t < stacks; t++){ // stacks are ELEVATION so they count theta
             var phi1 = ( (t)/stacks )*Math.PI;
             var phi2 = ( (t+1)/stacks )*Math.PI;
 
+            //texture v coordinates for this stack
+            var vTex1 = ( (t)/stacks );
+            var vTex2 = ( (t+1)/stacks );
 
-            for( p = 0; p < slices+1; p++){ // slices are ORANGE SLICES so 					
-                var theta = ( (p)/slices )*2*Math.PI; 
+            var sinPhi1 = Math.sin(phi1); var cosPhi1 = Math.cos(phi1);
+            var sinPhi2 = Math.sin(phi2); var cosPhi2 = Math.cos(phi2);
+
+            for( p = 0; p < slices+1; p++){ // slices are ORANGE SLICES so
+                var theta = ( (p)/slices )*2*Math.PI;
                 var theta1 = ( (p+1)/slices )*2*Math.PI; //get the points that would be in the next iteration of this loop
 
+                var sinTheta = Math.sin(theta); var cosTheta = Math.cos(theta);
+                var sinTheta1 = Math.sin(theta1); var cosTheta1 = Math.cos(theta1);
+
+                //texture u coordinates for this slice
+                var uTex = 1 - ( (p)/slices );
+                var uTex1 = 1 - ( (p+1)/slices );
+
                 //point 1
-                var xVal1 = sRadius * Math.cos(theta) * Math.sin(phi1);
-                var yVal2 = sRadius * Math.sin(theta) * Math.sin(phi1);
-                var zVal3 = sRadius * Math.cos(phi1);
-                
+                var xVal1 = sRadius * cosTheta * sinPhi1;
+                var yVal2 = sRadius * sinTheta * sinPhi1;
+                var zVal3 = sRadius * cosPhi1;
+
                 //point 2
-                var xVala = sRadius * Math.cos(theta1) * Math.sin(phi1);
-                var yValb = sRadius * Math.sin(theta1) * Math.sin(phi1);
-                var zValc = sRadius * Math.cos(phi1);
-                
+                var xVala = sRadius * cosTheta1 * sinPhi1;
+                var yValb = sRadius * sinTheta1 * sinPhi1;
+                var zValc = sRadius * cosPhi1;
+
                 //point 3
-                var xVal4 = sRadius * Math.cos(theta) * Math.sin(phi2);
-                var yVal5 = sRadius * Math.sin(theta) * Math.sin(phi2);
-                var zVal6 = sRadius * Math.cos(phi2);
+                var xVal4 = sRadius * cosTheta * sinPhi2;
+                var yVal5 = sRadius * sinTheta * sinPhi2;
+                var zVal6 = sRadius * cosPhi2;
 
                 //point 4
-                var xVald = sRadius * Math.cos(theta1) * Math.sin(phi2);
-                var yVale = sRadius * Math.sin(theta1) * Math.sin(phi2);
-                var zValf = sRadius * Math.cos(phi2);
+                var xVald = sRadius * cosTheta1 * sinPhi2;
+                var yVale = sRadius * sinTheta1 * sinPhi2;
+                var zValf = sRadius * cosPhi2;
 
                 //triangle 1 = points 1, 2, 3
-                sVertices = sVertices.concat([ xVal1, yVal2, zVal3 ]);
-                sVertices = sVertices.concat([ xVala, yValb, zValc ]);
-                sVertices = sVertices.concat([ xVal4, yVal5, zVal6 ]);
+                sVertices[vi++] = xVal1; sVertices[vi++] = yVal2; sVertices[vi++] = zVal3;
+                sVertices[vi++] = xVala; sVertices[vi++] = yValb; sVertices[vi++] = zValc;
+                sVertices[vi++] = xVal4; sVertices[vi++] = yVal5; sVertices[vi++] = zVal6;
 
                 //triangle 2 = points 2, 4, 3
-                sVertices = sVertices.concat([ xVala, yValb, zValc ]);
-                sVertices = sVertices.concat([ xVald, yVale, zValf ]);
-                sVertices = sVertices.concat([ xVal4, yVal5, zVal6 ]);
+                sVertices[vi++] = xVala; sVertices[vi++] = yValb; sVertices[vi++] = zValc;
+                sVertices[vi++] = xVald; sVertices[vi++] = yVale; sVertices[vi++] = zValf;
+                sVertices[vi++] = xVal4; sVertices[vi++] = yVal5; sVertices[vi++] = zVal6;
                 count += 6;
 
-                
+                //texture coordinates follow the same two triangles, point for point
+                textureCoords[ti++] = uTex;  textureCoords[ti++] = vTex1;
+                textureCoords[ti++] = uTex1; textureCoords[ti++] = vTex1;
+                textureCoords[ti++] = uTex;  textureCoords[ti++] = vTex2;
+
+                textureCoords[ti++] = uTex1; textureCoords[ti++] = vTex1;
+                textureCoords[ti++] = uTex1; textureCoords[ti++] = vTex2;
+                textureCoords[ti++] = uTex;  textureCoords[ti++] = vTex2;
+
+
                 if (!useGouraud){
                     //normals for first triangle
-                    var normalizeTri1 = triangleNormalize([ xVal1, yVal2, zVal3 ], [ xVala, yValb, zValc ], [ xVal4, yVal5, zVal6 ]);
+                    triangleNormalize(normal, xVal1, yVal2, zVal3, xVala, yValb, zValc, xVal4, yVal5, zVal6);
+                    for (var f = 0; f < 3; f++){
+                        vertexNormals[ni++] = normal[0]; vertexNormals[ni++] = normal[1]; vertexNormals[ni++] = normal[2];
+                    }
 
-                    vertexNormals = vertexNormals.concat( normalizeTri1, normalizeTri1, normalizeTri1 );
-                    
                     //normals for second triangle
 
-                    var normalizeTri2 = triangleNormalize([ xVala, yValb, zValc ], [ xVald, yVale, zValf ], [ xVal4, yVal5, zVal6 ]);
-
-                    vertexNormals = vertexNormals.concat( normalizeTri2, normalizeTri2, normalizeTri2 );
+                    triangleNormalize(normal, xVala, yValb, zValc, xVald, yVale, zValf, xVal4, yVal5, zVal6);
+                    for (var g = 0; g < 3; g++){
+                        vertexNormals[ni++] = normal[0]; vertexNormals[ni++] = normal[1]; vertexNormals[ni++] = normal[2];
+                    }
                 } else {
-                    //normals for first triangle
-                    var normalizePoint1 = triangleNormalizeGouraud([ xVal1, yVal2, zVal3 ]);
-                    var normalizePoint2 = triangleNormalizeGouraud([ xVala, yValb, zValc ]);
-                    var normalizePoint3 = triangleNormalizeGouraud([ xVal4, yVal5, zVal6 ]);
+                    //on a unit-centered sphere the vertex normal is just the normalized position
+                    var invR = 1 / sRadius;
 
-                    vertexNormals = vertexNormals.concat( normalizePoint1, normalizePoint2, normalizePoint3 );
-                    
+                    //normals for first triangle
+                    vertexNormals[ni++] = xVal1*invR; vertexNormals[ni++] = yVal2*invR; vertexNormals[ni++] = zVal3*invR;
+                    vertexNormals[ni++] = xVala*invR; vertexNormals[ni++] = yValb*invR; vertexNormals[ni++] = zValc*invR;
+                    vertexNormals[ni++] = xVal4*invR; vertexNormals[ni++] = yVal5*invR; vertexNormals[ni++] = zVal6*invR;
+
                     //normals for second triangle
 
-                    var normalizePoint4 = triangleNormalizeGouraud([ xVala, yValb, zValc ]);
-                    var normalizePoint5 = triangleNormalizeGouraud([ xVald, yVale, zValf ]);
-                    var normalizePoint6 = triangleNormalizeGouraud([ xVal4, yVal5, zVal6 ]);
-
-                    vertexNormals = vertexNormals.concat( normalizePoint4, normalizePoint5, normalizePoint6 );
+                    vertexNormals[ni++] = xVala*invR; vertexNormals[ni++] = yValb*invR; vertexNormals[ni++] = zValc*invR;
+                    vertexNormals[ni++] = xVald*invR; vertexNormals[ni++] = yVale*invR; vertexNormals[ni++] = zValf*invR;
+                    vertexNormals[ni++] = xVal4*invR; vertexNormals[ni++] = yVal5*invR; vertexNormals[ni++] = zVal6*invR;
                 }
             }
         }
-        spherePositionBuffer = gl.createBuffer();
+        //reuse the GL buffers across rebuilds instead of leaking a new set each time
+        if (!spherePositionBuffer) { spherePositionBuffer = gl.createBuffer(); }
         gl.bindBuffer(gl.ARRAY_BUFFER, spherePositionBuffer);
-        gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(sVertices), gl.STATIC_DRAW);
+        gl.bufferData(gl.ARRAY_BUFFER, sVertices, gl.STATIC_DRAW);
 
         ///item size is always 3 (3d vector describing position)
         spherePositionBuffer.itemSize=3;
@@ -360,65 +396,39 @@ uniform vec3 uLightingDirection;	//direction of light
         //(2*(slices+1)*stacks)
         spherePositionBuffer.numItems=count;
 
-        var textureCoords = [];
-        for(t = 0 ; t < stacks ; t++ )	{
-            var phi1 = ( (t)/stacks );
-            var phi2 = ( (t+1)/stacks );
-            for( p = 0 ; p < slices+1 ; p++ ){
-                var theta = 1 - ( (p)/slices );
-                var theta1 = 1 - ( (p+1)/slices ); //same thing as the first double loop
-
-                //triangle 1
-                textureCoords = textureCoords.concat([theta, phi1]);
-                textureCoords = textureCoords.concat([theta1, phi1]);
-                textureCoords = textureCoords.concat([theta, phi2]);
-
-                //triangle 2
-                textureCoords = textureCoords.concat([theta1, phi1]);
-                textureCoords = textureCoords.concat([theta, phi2]);
-                textureCoords = textureCoords.concat([theta1, phi2]);
-            }
-        }
-        sphereVertexTextureCoordBuffer = gl.createBuffer();
+        if (!sphereVertexTextureCoordBuffer) { sphereVertexTextureCoordBuffer = gl.createBuffer(); }
         gl.bindBuffer(gl.ARRAY_BUFFER, sphereVertexTextureCoordBuffer);
-        gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(textureCoords), gl.STATIC_DRAW);
+        gl.bufferData(gl.ARRAY_BUFFER, textureCoords, gl.STATIC_DRAW);
         sphereVertexTextureCoordBuffer.itemSize = 2;
         sphereVertexTextureCoordBuffer.numItems = count;
-        gl.bindBuffer(gl.ARRAY_BUFFER, null);
 
-        sphereVertexNormalCoordBuffer = gl.createBuffer();
-
+        if (!sphereVertexNormalCoordBuffer) { sphereVertexNormalCoordBuffer = gl.createBuffer(); }
         gl.bindBuffer(gl.ARRAY_BUFFER, sphereVertexNormalCoordBuffer);
-        gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(vertexNormals), gl.STATIC_DRAW);
+        gl.bufferData(gl.ARRAY_BUFFER, vertexNormals, gl.STATIC_DRAW);
 
         sphereVertexNormalCoordBuffer.itemSize = 3;
         sphereVertexNormalCoordBuffer.numItems = count;
 
+        gl.bindBuffer(gl.ARRAY_BUFFER, null);
 
     }
 
-    function triangleNormalize(point1, point2, point3){
+    //writes the face normal into out[] rather than returning a fresh array, so building
+    //the high poly sphere doesn't allocate thousands of throwaway arrays
+    function triangleNormalize(out, x1, y1, z1, x2, y2, z2, x3, y3, z3){
 
-        var a = [point2[0]-point1[0], point2[1]-point1[1], point2[2]-point1[2]];
+        var ax = x2-x1; var ay = y2-y1; var az = z2-z1;
 
-        var b = [point3[0]-point1[0], point3[1]-point1[1], point3[2]-point1[2]];
+        var bx = x3-x1; var by = y3-y1; var bz = z3-z1;
 
         //cross products
-        var cross1 = a[1]*b[2] - a[2]*b[1];
-        var cross2 = a[2]*b[0] - a[0]*b[2];
-        var cross3 = a[0]*b[1] - a[1]*b[0];
+        var cross1 = ay*bz - az*by;
+        var cross2 = az*bx - ax*bz;
+        var cross3 = ax*by - ay*bx;
 
         var length = Math.sqrt(cross1*cross1 + cross2*cross2 + cross3*cross3);
-        return [-cross1/length, -cross2/length, -cross3/length];
-
-    }
-    function triangleNormalizeGouraud(point){
-
-        var x = point[0];
-        var y = point[1];
-        var z = point[2];
-        var length = Math.sqrt(x*x + y*y + z*z);
-        return [x/length, y/length, z/length];
+        if (length === 0) { length = 1; } //degenerate triangles at the poles
+        out[0] = -cross1/length; out[1] = -cross2/length; out[2] = -cross3/length;
 
     }
 
@@ -455,14 +465,13 @@ uniform vec3 uLightingDirection;	//direction of light
         var useSpecular = document.getElementById("specular").checked;
         gl.uniform1i(shaderProgram.useSpecular, useSpecular);
 
+        //one rebuild covers both toggles; checking them separately used to rebuild the
+        //geometry twice more on the very first frame
         var currentGouraud = document.getElementById("gouraud").checked;
-        if (lastGouraudState === null || currentGouraud !== lastGouraudState) {
-            initCircleBuffers();  
-            lastGouraudState = currentGouraud;
-        }
         var currentPoly = document.getElementById("poly").checked;
-        if (lastPoly === null || currentPoly !== lastPoly) {
-            initCircleBuffers();  
+        if (currentGouraud !== lastGouraudState || currentPoly !== lastPoly) {
+            initCircleBuffers();
+            lastGouraudState = currentGouraud;
             lastPoly = currentPoly;
         }
 
@@ -680,6 +689,9 @@ uniform vec3 uLightingDirection;	//direction of light
         initGL(canvas);
         initShaders();
         initCircleBuffers();
+        //record what we just built so the first drawScene doesn't rebuild it again
+        lastGouraudState = document.getElementById("gouraud").checked;
+        lastPoly = document.getElementById("poly").checked;
         initTexture();
 
 
@@ -889,7 +901,7 @@ uniform vec3 uLightingDirection;	//direction of light
     <input type="checkbox" id="texturing" checked /> Texturing <br/>
     <input type="checkbox" id="specular" checked /> Specular light <br/>
     <input type="checkbox" id="lighting" checked /> Overall lighting <br/>
-    <td>Zoom: <input type="range" id="zoom" min=".01" max="2" step="0.01" value="1.0" oninput="initBuffers()"/>
+    <td>Zoom: <input type="range" id="zoom" min=".01" max="2" step="0.01" value="1.0"/>
     </tr>
     </table>
 </div>
