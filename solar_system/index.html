@@ -1,0 +1,890 @@
+<html>
+
+<head>
+<title>Project 5</title>
+
+<meta http-equiv="content-type" content="text/html; charset=ISO-8859-1">
+
+<style>
+    html, body {
+        margin: 0;
+        padding: 0;
+    }
+	.container {
+		position: relative;
+	}
+	#overlay {
+		position: absolute;
+		left: 10px;
+		top: 10px;
+		color: white;
+	}
+</style>
+
+
+<script src="../lib/gl-matrix-2.7.0.min.js"></script>
+
+<!-- LOTS OF STUFF HERE -->
+<script id="shader-fs" type="x-shader/x-fragment">
+    precision mediump float;
+    uniform bool uUseTexturing;	//turns texturing on and off
+
+	//texture and light weighting coordinates.
+	varying vec2 vTextureCoord;
+	varying vec3 vLightWeighting;
+
+	//a sampler is the shader's representation of the texture.
+	uniform sampler2D uSampler;
+
+	void main(void) {
+
+        if (uUseTexturing){
+            //texture2D gets the appropriate pixel color from the texture.
+            vec4 textureColor = texture2D(uSampler, vec2(vTextureCoord.s, vTextureCoord.t));
+            //here we incorporate the lighting equation
+            gl_FragColor = vec4(textureColor.rgb * vLightWeighting, textureColor.a);
+        } else {
+            vec4 color = vec4(0.2, 0.2, 0.2, 1.0);
+            gl_FragColor = vec4(color.rgb * vLightWeighting, color.a);
+        }
+	}
+
+
+
+</script>
+
+<script id="shader-vs" type="x-shader/x-vertex">
+    
+    attribute vec3 aVertexPosition;	//vertex coords
+	attribute vec2 aTextureCoord;		//texture coords
+	attribute vec3 aVertexNormal;		//vertex normals
+	uniform mat4 uMVMatrix;			//model view matrix
+	uniform mat4 uPMatrix;			//perspective matrix
+	uniform mat3 uNMatrix;			//normal matrix
+	uniform vec3 uAmbientColor;		//ambient color
+uniform vec3 uLightingDirection;	//direction of light
+	uniform vec3 uDirectionalColor;	//color of directional light
+	uniform bool uUseLighting;	//turns lighting on and off
+	varying vec3 vLightWeighting;		//output light weighting
+	varying vec2 vTextureCoord;		//output texture coords
+    uniform bool uIsSun;
+    uniform float light_specularity;
+    uniform float material_specularity;
+    uniform float material_shine;
+
+    uniform vec3 uPtLightPos;
+
+    uniform bool uUseSpec; //turns specular light on and off
+
+
+
+	///pass through the texture coordinates from aTextureCoord to vTextureCoord
+	///the varying variable is the output.
+	void main(void) {
+		gl_Position = uPMatrix * uMVMatrix * vec4(aVertexPosition, 1.0);
+		vTextureCoord = aTextureCoord;
+        
+        
+        if (!uUseLighting || uIsSun) {
+			//light is white by default
+			vLightWeighting = vec3(1.0, 1.0, 1.0);
+		} else {
+            ///calculate the light weighting
+            vec3 transformedNormal = uNMatrix * aVertexNormal;
+
+            vec3 p = (uMVMatrix * vec4(aVertexPosition, 1.0)).xyz;
+            vec3 ptLightDir = normalize(uPtLightPos - p);
+
+            float directionalLightWeighting = max( 0.0, dot(normalize(transformedNormal), ptLightDir));
+
+            vec3 reflection = reflect(ptLightDir, normalize(transformedNormal));
+            
+            float dotProd = dot ( normalize(reflection), normalize(p) );
+            float spec= light_specularity * material_specularity * pow( max ( dotProd, 0.0), material_shine);
+
+
+            // point light
+            float directionalPtLightWeighting = max( dot(normalize(transformedNormal), 1.0 * normalize(uPtLightPos - p)), 0.0);
+
+
+            if (uUseSpec){
+                vec3 ptLightWeight = vec3(1.0, 1.0, 1.0)*directionalPtLightWeighting + spec;
+                vLightWeighting = uAmbientColor + spec + ptLightWeight;
+            } else {
+                vec3 ptLightWeight = vec3(1.0, 1.0, 1.0)*directionalPtLightWeighting;
+                vLightWeighting = uAmbientColor + ptLightWeight;
+            }
+        }
+
+    }
+
+
+
+
+
+</script>
+
+<script type="text/javascript" src="../lib/webgl-utils.js"></script>
+
+<script type="text/javascript">
+
+
+    var gl;
+
+    function initGL(canvas) {
+        try {
+            gl = canvas.getContext("experimental-webgl");
+            gl.viewportWidth = canvas.width;
+            gl.viewportHeight = canvas.height;
+        } catch (e) {
+        }
+        if (!gl) {
+                alert("Could not initialise WebGL");
+        }
+    }
+
+    function getShader(gl, id) {
+
+        //Load the shader code by it's ID, as assigned in
+        //the script element (e.g. "shader-fs" or "shader-vs")
+        var shaderScript = document.getElementById(id);
+            if (!shaderScript) { return null; }
+
+        var k = shaderScript.firstChild;
+        var str = "";
+        //While firstChild exists
+        while (k) {
+        ///If the firstChild is a TEXT type document
+            if (k.nodeType == 3) {
+                //Append the text to str.
+                str += k.textContent;
+            }
+            k = k.nextSibling;
+        }
+
+        var shader;
+        if (shaderScript.type == "x-shader/x-fragment") {
+            shader = gl.createShader(gl.FRAGMENT_SHADER);
+        } else if (shaderScript.type == "x-shader/x-vertex") {
+            shader = gl.createShader(gl.VERTEX_SHADER);
+        } else {
+            return null;
+        }
+
+		//Now we have the type and the code, and we 
+		//provide it to openGL as such, then compile the shader code.
+		gl.shaderSource(shader, str);
+		gl.compileShader(shader);
+
+		//If the compilation of the shader code fails, report the error
+		//and return nothing, since the shader failed to compile.
+		if (!gl.getShaderParameter(shader, gl.COMPILE_STATUS)) {
+			alert(gl.getShaderInfoLog(shader));
+			return null;
+		}
+		
+		//If there were no errors in compilation, return the compiled shader.
+		return shader;
+    }
+
+
+
+    var shaderProgram;
+
+    function initShaders(){
+        var fragmentShader = getShader(gl, "shader-fs");
+        var vertexShader = getShader(gl, "shader-vs");
+
+
+        //Create the program, then attach and link 
+        shaderProgram = gl.createProgram();
+        gl.attachShader(shaderProgram, vertexShader);
+        gl.attachShader(shaderProgram, fragmentShader);
+        gl.linkProgram(shaderProgram);
+
+        //Check for linker errors.
+        if (!gl.getProgramParameter(shaderProgram, gl.LINK_STATUS)) {
+            alert("Could not initialise shaders");
+        }
+
+        //Attach shaderprogram to openGL context.
+        gl.useProgram(shaderProgram);
+
+        
+        
+
+        shaderProgram.vertexNormalAttribute = gl.getAttribLocation(shaderProgram, "aVertexNormal");
+        gl.enableVertexAttribArray(shaderProgram.vertexNormalAttribute);
+
+
+
+
+
+        //textures
+        shaderProgram.vertexPositionAttribute = gl.getAttribLocation(shaderProgram, "aVertexPosition");
+        gl.enableVertexAttribArray(shaderProgram.vertexPositionAttribute);
+
+        shaderProgram.textureCoordAttribute = gl.getAttribLocation(shaderProgram, "aTextureCoord");
+        gl.enableVertexAttribArray(shaderProgram.textureCoordAttribute);
+
+        shaderProgram.pMatrixUniform = gl.getUniformLocation(shaderProgram, "uPMatrix");
+        shaderProgram.mvMatrixUniform = gl.getUniformLocation(shaderProgram, "uMVMatrix");
+        shaderProgram.nMatrixUniform = gl.getUniformLocation(shaderProgram, "uNMatrix");
+        shaderProgram.samplerUniform = gl.getUniformLocation(shaderProgram, "uSampler");
+
+
+        shaderProgram.useLightingUniform = gl.getUniformLocation(shaderProgram, "uUseLighting");
+        shaderProgram.uIsSun = gl.getUniformLocation(shaderProgram, "uIsSun");
+        shaderProgram.useSpecular = gl.getUniformLocation(shaderProgram, "uUseSpec");
+
+        shaderProgram.useTexturing = gl.getUniformLocation(shaderProgram, "uUseTexturing");
+
+        shaderProgram.ptLightPosUniform = gl.getUniformLocation(shaderProgram, "uPtLightPos");
+
+
+        shaderProgram.ambientColorUniform = gl.getUniformLocation(shaderProgram, "uAmbientColor");
+        shaderProgram.lightingDirectionUniform = gl.getUniformLocation(shaderProgram, "uLightingDirection");
+        shaderProgram.directionalColorUniform = gl.getUniformLocation(shaderProgram, "uDirectionalColor");
+
+
+        shaderProgram.lightSpecularityUniform = gl.getUniformLocation(shaderProgram, "light_specularity");
+        shaderProgram.materialSpecularityUniform = gl.getUniformLocation(shaderProgram, "material_specularity");
+        shaderProgram.materialShineUniform = gl.getUniformLocation(shaderProgram, "material_shine");
+
+    }
+
+    var triLinePositionBuffer;		var triLineColorBuffer;
+
+    var negX = -2.0; var posX = 2.0; var negY = -2.0; var posY = 2.0;
+    //We will Generate the geometry with this function
+
+    function initCircleBuffers(){ 
+
+        var useGouraud = document.getElementById("gouraud").checked;
+        var useLowPoly = document.getElementById("poly").checked;
+
+
+        var sRadius = .6; var slices = 12; var stacks = 8; var sVertices = []; var count =0;
+
+        if (useLowPoly){
+            slices = 50; stacks = 40;
+        }
+
+        var vertexNormals = [];
+
+        for(t = 0; t < stacks; t++){ // stacks are ELEVATION so they count theta
+            var phi1 = ( (t)/stacks )*Math.PI;
+            var phi2 = ( (t+1)/stacks )*Math.PI;
+
+
+            for( p = 0; p < slices+1; p++){ // slices are ORANGE SLICES so 					
+                var theta = ( (p)/slices )*2*Math.PI; 
+                var theta1 = ( (p+1)/slices )*2*Math.PI; //get the points that would be in the next iteration of this loop
+
+                //point 1
+                var xVal1 = sRadius * Math.cos(theta) * Math.sin(phi1);
+                var yVal2 = sRadius * Math.sin(theta) * Math.sin(phi1);
+                var zVal3 = sRadius * Math.cos(phi1);
+                
+                //point 2
+                var xVala = sRadius * Math.cos(theta1) * Math.sin(phi1);
+                var yValb = sRadius * Math.sin(theta1) * Math.sin(phi1);
+                var zValc = sRadius * Math.cos(phi1);
+                
+                //point 3
+                var xVal4 = sRadius * Math.cos(theta) * Math.sin(phi2);
+                var yVal5 = sRadius * Math.sin(theta) * Math.sin(phi2);
+                var zVal6 = sRadius * Math.cos(phi2);
+
+                //point 4
+                var xVald = sRadius * Math.cos(theta1) * Math.sin(phi2);
+                var yVale = sRadius * Math.sin(theta1) * Math.sin(phi2);
+                var zValf = sRadius * Math.cos(phi2);
+
+                //triangle 1 = points 1, 2, 3
+                sVertices = sVertices.concat([ xVal1, yVal2, zVal3 ]);
+                sVertices = sVertices.concat([ xVala, yValb, zValc ]);
+                sVertices = sVertices.concat([ xVal4, yVal5, zVal6 ]);
+
+                //triangle 2 = points 2, 4, 3
+                sVertices = sVertices.concat([ xVala, yValb, zValc ]);
+                sVertices = sVertices.concat([ xVald, yVale, zValf ]);
+                sVertices = sVertices.concat([ xVal4, yVal5, zVal6 ]);
+                count += 6;
+
+                
+                if (!useGouraud){
+                    //normals for first triangle
+                    var normalizeTri1 = triangleNormalize([ xVal1, yVal2, zVal3 ], [ xVala, yValb, zValc ], [ xVal4, yVal5, zVal6 ]);
+
+                    vertexNormals = vertexNormals.concat( normalizeTri1, normalizeTri1, normalizeTri1 );
+                    
+                    //normals for second triangle
+
+                    var normalizeTri2 = triangleNormalize([ xVala, yValb, zValc ], [ xVald, yVale, zValf ], [ xVal4, yVal5, zVal6 ]);
+
+                    vertexNormals = vertexNormals.concat( normalizeTri2, normalizeTri2, normalizeTri2 );
+                } else {
+                    //normals for first triangle
+                    var normalizePoint1 = triangleNormalizeGouraud([ xVal1, yVal2, zVal3 ]);
+                    var normalizePoint2 = triangleNormalizeGouraud([ xVala, yValb, zValc ]);
+                    var normalizePoint3 = triangleNormalizeGouraud([ xVal4, yVal5, zVal6 ]);
+
+                    vertexNormals = vertexNormals.concat( normalizePoint1, normalizePoint2, normalizePoint3 );
+                    
+                    //normals for second triangle
+
+                    var normalizePoint4 = triangleNormalizeGouraud([ xVala, yValb, zValc ]);
+                    var normalizePoint5 = triangleNormalizeGouraud([ xVald, yVale, zValf ]);
+                    var normalizePoint6 = triangleNormalizeGouraud([ xVal4, yVal5, zVal6 ]);
+
+                    vertexNormals = vertexNormals.concat( normalizePoint4, normalizePoint5, normalizePoint6 );
+                }
+            }
+        }
+        spherePositionBuffer = gl.createBuffer();
+        gl.bindBuffer(gl.ARRAY_BUFFER, spherePositionBuffer);
+        gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(sVertices), gl.STATIC_DRAW);
+
+        ///item size is always 3 (3d vector describing position)
+        spherePositionBuffer.itemSize=3;
+
+        //numItems is the number of vertices in the triangle strip
+        //(2*(slices+1)*stacks)
+        spherePositionBuffer.numItems=count;
+
+        var textureCoords = [];
+        for(t = 0 ; t < stacks ; t++ )	{
+            var phi1 = ( (t)/stacks );
+            var phi2 = ( (t+1)/stacks );
+            for( p = 0 ; p < slices+1 ; p++ ){
+                var theta = 1 - ( (p)/slices );
+                var theta1 = 1 - ( (p+1)/slices ); //same thing as the first double loop
+
+                //triangle 1
+                textureCoords = textureCoords.concat([theta, phi1]);
+                textureCoords = textureCoords.concat([theta1, phi1]);
+                textureCoords = textureCoords.concat([theta, phi2]);
+
+                //triangle 2
+                textureCoords = textureCoords.concat([theta1, phi1]);
+                textureCoords = textureCoords.concat([theta, phi2]);
+                textureCoords = textureCoords.concat([theta1, phi2]);
+            }
+        }
+        sphereVertexTextureCoordBuffer = gl.createBuffer();
+        gl.bindBuffer(gl.ARRAY_BUFFER, sphereVertexTextureCoordBuffer);
+        gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(textureCoords), gl.STATIC_DRAW);
+        sphereVertexTextureCoordBuffer.itemSize = 2;
+        sphereVertexTextureCoordBuffer.numItems = count;
+        gl.bindBuffer(gl.ARRAY_BUFFER, null);
+
+        sphereVertexNormalCoordBuffer = gl.createBuffer();
+
+        gl.bindBuffer(gl.ARRAY_BUFFER, sphereVertexNormalCoordBuffer);
+        gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(vertexNormals), gl.STATIC_DRAW);
+
+        sphereVertexNormalCoordBuffer.itemSize = 3;
+        sphereVertexNormalCoordBuffer.numItems = count;
+
+
+    }
+
+    function triangleNormalize(point1, point2, point3){
+
+        var a = [point2[0]-point1[0], point2[1]-point1[1], point2[2]-point1[2]];
+
+        var b = [point3[0]-point1[0], point3[1]-point1[1], point3[2]-point1[2]];
+
+        //cross products
+        var cross1 = a[1]*b[2] - a[2]*b[1];
+        var cross2 = a[2]*b[0] - a[0]*b[2];
+        var cross3 = a[0]*b[1] - a[1]*b[0];
+
+        var length = Math.sqrt(cross1*cross1 + cross2*cross2 + cross3*cross3);
+        return [-cross1/length, -cross2/length, -cross3/length];
+
+    }
+    function triangleNormalizeGouraud(point){
+
+        var x = point[0];
+        var y = point[1];
+        var z = point[2];
+        var length = Math.sqrt(x*x + y*y + z*z);
+        return [x/length, y/length, z/length];
+
+    }
+
+
+    //Here we connect the uniform matrices 
+    var normalMatrix = mat3.create();
+
+    function setMatrixUniforms() {
+
+        gl.uniformMatrix4fv(shaderProgram.pMatrixUniform, false, pMatrix);
+        gl.uniformMatrix4fv(shaderProgram.mvMatrixUniform, false, mvMatrix);
+        
+        mat3.fromMat4(normalMatrix, mvMatrix);
+        mat3.invert(normalMatrix, normalMatrix);
+        mat3.transpose(normalMatrix,normalMatrix);
+        gl.uniformMatrix3fv(shaderProgram.nMatrixUniform, false, normalMatrix);
+
+    }
+
+    var mvMatrix = mat4.create();
+    var pMatrix = mat4.create();
+
+    var lastGouraudState = null;
+    var lastPoly = null;
+    
+    function drawScene() {
+
+        var useLighting = document.getElementById("lighting").checked;
+        gl.uniform1i(shaderProgram.useLightingUniform, useLighting);
+
+        var useTexturing = document.getElementById("texturing").checked;
+        gl.uniform1i(shaderProgram.useTexturing, useTexturing);
+
+        var useSpecular = document.getElementById("specular").checked;
+        gl.uniform1i(shaderProgram.useSpecular, useSpecular);
+
+        var currentGouraud = document.getElementById("gouraud").checked;
+        if (lastGouraudState === null || currentGouraud !== lastGouraudState) {
+            initCircleBuffers();  
+            lastGouraudState = currentGouraud;
+        }
+        var currentPoly = document.getElementById("poly").checked;
+        if (lastPoly === null || currentPoly !== lastPoly) {
+            initCircleBuffers();  
+            lastPoly = currentPoly;
+        }
+
+        gl.viewport(0, 0, gl.viewportWidth, gl.viewportHeight);
+
+        gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
+
+        var zoom = 1;
+        if(document.getElementById("zoom").value.length > 0)
+        {zoom = parseFloat(document.getElementById("zoom").value)}
+
+        //allocate a perspective matrix in pMatrix
+        mat4.perspective(pMatrix, zoom, gl.viewportWidth / gl.viewportHeight, 0.1, 500.0);
+
+
+        //////////////Load in Sphere Vertices
+
+        mat4.identity(mvMatrix);
+
+        mat4.translate(mvMatrix, mvMatrix, [0.0, 0.0, -20.0]);
+
+        mat4.multiply(mvMatrix, mvMatrix, mouseRotMatrix);
+
+       
+        //////////////Load in Sphere Vertices
+        gl.bindBuffer(gl.ARRAY_BUFFER, spherePositionBuffer);
+        gl.vertexAttribPointer(shaderProgram.vertexPositionAttribute, spherePositionBuffer.itemSize, gl.FLOAT, false, 0, 0);
+
+        gl.bindBuffer(gl.ARRAY_BUFFER, sphereVertexNormalCoordBuffer );
+        gl.vertexAttribPointer(shaderProgram.vertexNormalAttribute, sphereVertexNormalCoordBuffer.itemSize, gl.FLOAT, false, 0, 0);
+
+
+        gl.bindBuffer(gl.ARRAY_BUFFER, sphereVertexTextureCoordBuffer);
+        gl.vertexAttribPointer(shaderProgram.textureCoordAttribute, sphereVertexTextureCoordBuffer.itemSize, gl.FLOAT, false, 0, 0);
+
+        gl.activeTexture(gl.TEXTURE0);
+        gl.bindTexture(gl.TEXTURE_2D, worldTexture);
+        gl.uniform1i(shaderProgram.samplerUniform, 0);
+
+        //send shading information
+
+        gl.uniform3f(shaderProgram.ambientColorUniform, .1, .1, .1);
+
+        gl.uniform3f(shaderProgram.lightingDirectionUniform, 1, 1, 1);
+
+        gl.uniform3f(shaderProgram.directionalColorUniform, 0, 0, 0);
+        
+
+        gl.uniform1f(shaderProgram.lightSpecularityUniform, 1);
+        gl.uniform1f(shaderProgram.materialSpecularityUniform, 0.5);
+        gl.uniform1f(shaderProgram.materialShineUniform, 32.0);
+
+        gl.uniform3f(shaderProgram.ptLightPosUniform, 0, 0, 0);
+
+
+        //sun sphere
+
+        //turn lighting off for the sun
+        gl.uniform1i(shaderProgram.uIsSun, 1);
+
+        var sunMatrix = mat4.clone(mvMatrix); // everything based off the sun
+
+        mat4.rotate(mvMatrix, mvMatrix, degToRad(xRot), [.1, .2, 3]);
+
+        setMatrixUniforms();
+
+        gl.drawArrays(gl.TRIANGLES, 0, spherePositionBuffer.numItems);
+        gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, null);
+
+        var sunWorldPos = vec3.fromValues(0, 0, 0);
+        var sunViewPos = vec3.create();
+        vec3.transformMat4(sunViewPos, sunWorldPos, sunMatrix);
+        gl.uniform3fv(shaderProgram.ptLightPosUniform, sunViewPos);
+
+        gl.uniform1i(shaderProgram.uIsSun, 0);
+
+        
+        
+
+        //earth
+        var earthMatrix = mat4.clone(sunMatrix);
+        mat4.rotate(earthMatrix, earthMatrix, degToRad(xRot*2), [0, 1, 0]); // rotate around sun
+        mat4.translate(earthMatrix, earthMatrix, [5, 0.0, 0.0]); // move away from sun
+        mat4.rotate(earthMatrix, earthMatrix, degToRad(xRot*.86), [1.3, .9, .1]); //rotate about itself
+        mat4.scale(earthMatrix, earthMatrix, [0.5, 0.5, 0.5]); //change size
+
+        gl.bindTexture(gl.TEXTURE_2D, earthTexture);
+        mvMatrix = earthMatrix; 
+
+        setMatrixUniforms();
+        gl.drawArrays(gl.TRIANGLES, 0, spherePositionBuffer.numItems);
+
+        
+        //mercury
+        var mercuryMatrix = mat4.clone(sunMatrix);
+        mat4.rotate(mercuryMatrix, mercuryMatrix, degToRad(xRot), [0,1,.4]);
+
+        mat4.translate(mercuryMatrix, mercuryMatrix, [2.0, 0.0, 0.0]);
+        mat4.scale(mercuryMatrix, mercuryMatrix, [.3, .3, .3]); //change size
+
+        gl.bindTexture(gl.TEXTURE_2D, mercuryTexture);
+
+        mat4.rotate(mercuryMatrix, mercuryMatrix, degToRad(xRot*.96), [.3, 1, .9]);
+        mvMatrix = mercuryMatrix; 
+
+        setMatrixUniforms();
+        gl.drawArrays(gl.TRIANGLES, 0, spherePositionBuffer.numItems);
+
+        //venus
+        var venusMatrix = mat4.clone(sunMatrix);
+        mat4.rotate(venusMatrix, venusMatrix, degToRad(xRot*4), [0, .2, 1]); // rotate around sun
+        mat4.translate(venusMatrix, venusMatrix, [3.5, 0.0, 0.0]);
+        mat4.scale(venusMatrix, venusMatrix, [.4, .4, .4]); //change size
+
+        gl.bindTexture(gl.TEXTURE_2D, venusTexture);
+        mat4.rotate(venusMatrix, venusMatrix, degToRad(xRot*23), [.75, .3, .8]);
+        mvMatrix = venusMatrix; 
+        
+        setMatrixUniforms();
+        gl.drawArrays(gl.TRIANGLES, 0, spherePositionBuffer.numItems);
+
+        //mars
+        var marsMatrix = mat4.clone(sunMatrix);
+        mat4.rotate(marsMatrix, marsMatrix, degToRad(xRot*.45), [0.4, 0, 1]); // rotate around sun
+        mat4.translate(marsMatrix, marsMatrix, [6, 0.0, 0.0]);
+        mat4.scale(marsMatrix, marsMatrix, [.4, .4, .4]); //change size
+
+        gl.bindTexture(gl.TEXTURE_2D, marsTexture);
+        mat4.rotate(marsMatrix, marsMatrix, degToRad(xRot*.7), [.75, .3, .8]);
+
+        mvMatrix = marsMatrix; 
+       
+        setMatrixUniforms();
+        gl.drawArrays(gl.TRIANGLES, 0, spherePositionBuffer.numItems);
+
+        //jupiter
+        var jupiterMatrix = mat4.clone(sunMatrix);
+        mat4.rotate(jupiterMatrix, jupiterMatrix, degToRad(xRot*.4), [0.3, 1, 0.4]); // rotate around sun
+        mat4.translate(jupiterMatrix, jupiterMatrix, [7, 0.0, 0.0]);
+        mat4.scale(jupiterMatrix, jupiterMatrix, [1.25, 1.25, 1.25]); //change size
+
+        gl.bindTexture(gl.TEXTURE_2D, jupiterTexture);
+
+        mat4.rotate(jupiterMatrix, jupiterMatrix, degToRad(xRot*1.4), [.03, .1, .13]);
+
+        mvMatrix = jupiterMatrix; 
+
+        
+        setMatrixUniforms();
+        gl.drawArrays(gl.TRIANGLES, 0, spherePositionBuffer.numItems);
+
+        //saturn
+        var saturnMatrix = mat4.clone(sunMatrix);
+        mat4.rotate(saturnMatrix, saturnMatrix, degToRad(xRot*.75), [0.3, 1.5, 0.1]); // rotate around sun
+        mat4.translate(saturnMatrix, saturnMatrix, [8.5, 0.0, 0.0]);
+        mat4.scale(saturnMatrix, saturnMatrix, [1, 1, 1]); //change size
+
+        gl.bindTexture(gl.TEXTURE_2D, saturnTexture);
+
+        mat4.rotate(saturnMatrix, saturnMatrix, degToRad(xRot*.6), [.8, .2, 3]);
+
+        mvMatrix = saturnMatrix; 
+
+        setMatrixUniforms();
+        gl.drawArrays(gl.TRIANGLES, 0, spherePositionBuffer.numItems);
+
+        //uranus
+        var uranusMatrix = mat4.clone(sunMatrix);
+        mat4.rotate(uranusMatrix, uranusMatrix, degToRad(xRot*.5), [0.8, 1, 0]); // rotate around sun
+        mat4.translate(uranusMatrix, uranusMatrix, [10, 0.0, 0.0]);
+        mat4.scale(uranusMatrix, uranusMatrix, [.5, .5, .5]); //change size
+
+        gl.bindTexture(gl.TEXTURE_2D, uranusTexture);
+
+        mat4.rotate(uranusMatrix, uranusMatrix, degToRad(xRot*1.2), [.2, -.2, .7]);
+
+        mvMatrix = uranusMatrix; 
+
+       
+        setMatrixUniforms();
+        gl.drawArrays(gl.TRIANGLES, 0, spherePositionBuffer.numItems);
+
+        //neptune
+        var neptuneMatrix = mat4.clone(sunMatrix);
+        mat4.rotate(neptuneMatrix, neptuneMatrix, degToRad(xRot*.2), [0.8, 0, 0.3]); // rotate around sun
+        mat4.translate(neptuneMatrix, neptuneMatrix, [11, 0.0, 0.0]);
+        mat4.scale(neptuneMatrix, neptuneMatrix, [.6, .6, .6]); //change size
+
+        gl.bindTexture(gl.TEXTURE_2D, neptuneTexture);
+
+        mat4.rotate(neptuneMatrix, neptuneMatrix, degToRad(xRot*1.7), [.3, -1, .4]);
+
+        mvMatrix = neptuneMatrix; 
+
+        
+        setMatrixUniforms();
+        gl.drawArrays(gl.TRIANGLES, 0, spherePositionBuffer.numItems);
+
+        
+
+    }
+
+
+    var canvas;
+    var posXnode;
+    var posYnode;
+    function webGLStart() {
+
+        
+
+        canvas = document.getElementById("webGLcanvas");
+        canvas.width = window.innerWidth;
+        canvas.height=window.innerHeight;
+                
+        initGL(canvas);
+        initShaders();
+        initCircleBuffers();
+        initTexture();
+
+
+        gl.clearColor(0.0, 0.0, 0.0, 1.0);
+        gl.enable(gl.DEPTH_TEST);
+
+        //handle mouse inputs with our callbacks
+        canvas.onmousedown = handleMouseDown;
+        document.onmouseup = handleMouseUp;
+        document.onmousemove = handleMouseMove;
+
+        //Begin rendering the scene
+        tick();
+    }
+
+
+    
+    function tick(){
+        requestAnimFrame(tick);
+        resize(canvas);
+        animate();
+        drawScene();        
+    }
+
+    var lastTime = 0;	var xRot = 0;		var xSpeed = 30;
+
+	function animate() {
+		var timeNow = new Date().getTime();
+		if (lastTime != 0) {
+			var elapsed = timeNow - lastTime;
+			//update the rotation to the current time.
+			xRot += (xSpeed * elapsed) / 1000.0;
+		}
+		lastTime = timeNow;
+	}
+
+
+    function resize(canvas){
+        var dispWidth = window.innerWidth;	  //browser width
+        var dispHeight = window.innerHeight;  //browser height
+
+        //check if the canvas is not the same size
+        if( canvas.width!=dispWidth || canvas.height!=dispHeight ){
+            canvas.width = dispWidth;
+            canvas.height = dispHeight;
+            gl.viewport(0,0,gl.canvas.width, gl.canvas.height);
+            gl.viewportWidth = canvas.width;
+            gl.viewportHeight = canvas.height;
+        }
+    }
+
+    var worldTexture;
+
+    function initTexture() {
+
+        //sun
+        worldTexture = gl.createTexture();
+        worldTexture.image = new Image();
+
+        worldTexture.image.onload = function() {
+            handleLoadedTexture(worldTexture)
+        }
+        //earth
+        earthTexture = gl.createTexture();
+        earthTexture.image = new Image();
+
+        earthTexture.image.onload = function() {
+            handleLoadedTexture(earthTexture)
+        }
+        //mercury
+        mercuryTexture = gl.createTexture();
+        mercuryTexture.image = new Image();
+
+        mercuryTexture.image.onload = function() {
+            handleLoadedTexture(mercuryTexture)
+        }
+        //venus
+        venusTexture = gl.createTexture();
+        venusTexture.image = new Image();
+
+        venusTexture.image.onload = function() {
+            handleLoadedTexture(venusTexture)
+        }
+        //venus
+        marsTexture = gl.createTexture();
+        marsTexture.image = new Image();
+
+        marsTexture.image.onload = function() {
+            handleLoadedTexture(marsTexture)
+        }
+        //jupiter
+        jupiterTexture = gl.createTexture();
+        jupiterTexture.image = new Image();
+
+        jupiterTexture.image.onload = function() {
+            handleLoadedTexture(jupiterTexture)
+        }
+        //saturn
+        saturnTexture = gl.createTexture();
+        saturnTexture.image = new Image();
+
+        saturnTexture.image.onload = function() {
+            handleLoadedTexture(saturnTexture)
+        }
+        //uranus
+        uranusTexture = gl.createTexture();
+        uranusTexture.image = new Image();
+
+        uranusTexture.image.onload = function() {
+            handleLoadedTexture(uranusTexture)
+        }
+        //neptune
+        neptuneTexture = gl.createTexture();
+        neptuneTexture.image = new Image();
+
+        neptuneTexture.image.onload = function() {
+            handleLoadedTexture(neptuneTexture)
+        }
+
+        worldTexture.image.src = "../images/sunTexture.png";
+        earthTexture.image.src = "../images/worldMap.gif";
+        mercuryTexture.image.src = "../images/mercury.png";
+        venusTexture.image.src = "../images/venus.jpg";
+        marsTexture.image.src = "../images/mars.jpg";
+        jupiterTexture.image.src = "../images/jupiter.jpg";
+        saturnTexture.image.src = "../images/saturn.jpg";
+        uranusTexture.image.src = "../images/uranus.jpg";
+        neptuneTexture.image.src = "../images/neptune.png";
+
+    }
+
+
+    ///reads the texture image and saves it to the variable provided.
+    function handleLoadedTexture(texture) {
+        gl.bindTexture(gl.TEXTURE_2D, texture);
+        gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, true);
+        gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, texture.image);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
+        gl.bindTexture(gl.TEXTURE_2D, null);
+    }
+
+    var mouseDown = false;
+    var lastMouseX = null;
+    var lastMouseY = null;
+
+    ///rotation matrix to hold the effective rotation we want from the mouse.
+    var mouseRotMatrix = mat4.create();
+    mat4.identity(mouseRotMatrix);
+
+    function handleMouseDown(event) {
+    mouseDown = true;
+        lastMouseX = event.clientX;
+        lastMouseY = event.clientY;
+    }
+
+    function handleMouseUp(event) {
+        mouseDown = false;
+    }
+
+    function handleMouseMove(event) {
+
+        if (!mouseDown) { return; }
+        var newX = event.clientX;
+        var newY = event.clientY;
+
+        var deltaX = newX - lastMouseX
+        var newRotationMatrix = mat4.create();
+        mat4.identity(newRotationMatrix);
+        mat4.rotate(newRotationMatrix, newRotationMatrix, degToRad(deltaX/10), [1,0,0]);
+
+        var deltaY = newY - lastMouseY;
+        mat4.rotate(newRotationMatrix, newRotationMatrix, degToRad(deltaY / 10), [0, 1, 0]);
+
+        mat4.multiply(mouseRotMatrix, newRotationMatrix, mouseRotMatrix );
+        lastMouseX = newX
+        lastMouseY = newY;
+    }
+
+    function degToRad(degrees) {
+        return degrees * Math.PI / 180;
+    }
+
+
+
+</script>
+
+
+
+</head>
+
+<body onload="webGLStart();">
+
+<canvas id="webGLcanvas" style="border: 3px solid red;">
+</canvas>
+
+<div id="overlay">
+    <div> <span id="xPosition"></span></div>
+    <div> <span id="yPosition"></span></div>
+</div>
+<b>Select checkboxes:</b><BR>
+    <table style="border: 0; padding: 10px;">
+    <tr>
+    <input type="checkbox" id="gouraud" checked /> Unchecked: flat shading Checked: gouraud shading <br/>
+    <input type="checkbox" id="poly" checked /> Unchecked: low poly count Checked: high poly count <br/>
+    <input type="checkbox" id="texturing" checked /> Texturing <br/>
+    <input type="checkbox" id="specular" checked /> Specular light <br/>
+    <input type="checkbox" id="lighting" checked /> Overall lighting <br/>
+    <td>Zoom: <input type="range" id="zoom" min=".01" max="2" step="0.01" value="1.0" oninput="initBuffers()"/>
+    </tr>
+    </table>
+    
+</body>
+
+</html>
